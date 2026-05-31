@@ -8,3 +8,6 @@ https://www.skills.google/paths/16/course_templates/681/labs/629084
 
 3. Data Analysis with the FraudFinder Workshop
 https://www.skills.google/focuses/62971?catalog_rank=%7B%22rank%22%3A6%2C%22num_filters%22%3A0%2C%22has_search%22%3Atrue%7D&parent=catalog&search_id=84210247
+
+4. Introduction to Data Engineering Agent
+https://www.skills.google/focuses/157353?catalog_rank=%7B%22rank%22%3A1%2C%22num_filters%22%3A0%2C%22has_search%22%3Atrue%7D&parent=catalog&search_id=86290451
