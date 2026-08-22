@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and change this.
+project_id = "YOUR_GCP_PROJECT_ID"
+
+# Warsaw defaults are already set in variables.tf.
+# region       = "europe-central2"
+# cluster_name = "arm-stage1-autopilot"
+
+# Shared application capacity cap:
+# 4 Pods x 2 vCPU / 2 GiB = max 8 vCPU / 8 GiB.
+# max_replicas = 4

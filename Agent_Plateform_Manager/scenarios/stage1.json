@@ -1,0 +1,175 @@
+{
+  "daily_normal": {
+    "description": "Compressed daily website cycle: quiet -> ramp -> busy -> lunch spike -> evening peak -> decline.",
+    "seed": 101,
+    "noise_fraction": 0.05,
+    "phases": [
+      {
+        "name": "night",
+        "duration_s": 60,
+        "start_rps": 35,
+        "end_rps": 50
+      },
+      {
+        "name": "morning_ramp",
+        "duration_s": 120,
+        "start_rps": 50,
+        "end_rps": 260
+      },
+      {
+        "name": "business",
+        "duration_s": 120,
+        "start_rps": 260,
+        "end_rps": 240
+      },
+      {
+        "name": "lunch_spike",
+        "duration_s": 60,
+        "start_rps": 240,
+        "end_rps": 430
+      },
+      {
+        "name": "afternoon",
+        "duration_s": 90,
+        "start_rps": 280,
+        "end_rps": 300
+      },
+      {
+        "name": "evening_ramp",
+        "duration_s": 90,
+        "start_rps": 300,
+        "end_rps": 550
+      },
+      {
+        "name": "late_drop",
+        "duration_s": 60,
+        "start_rps": 550,
+        "end_rps": 70
+      }
+    ]
+  },
+  "morning_ramp": {
+    "description": "Gradual predictable increase; measures when HPA starts scaling and how long capacity takes to arrive.",
+    "seed": 102,
+    "noise_fraction": 0.03,
+    "phases": [
+      {
+        "name": "base",
+        "duration_s": 60,
+        "start_rps": 50,
+        "end_rps": 50
+      },
+      {
+        "name": "ramp",
+        "duration_s": 180,
+        "start_rps": 50,
+        "end_rps": 520
+      },
+      {
+        "name": "high",
+        "duration_s": 90,
+        "start_rps": 520,
+        "end_rps": 520
+      }
+    ]
+  },
+  "flash_crowd": {
+    "description": "Abrupt traffic jump; measures reactive scale-up delay and tail latency during provisioning.",
+    "seed": 103,
+    "noise_fraction": 0.04,
+    "phases": [
+      {
+        "name": "base",
+        "duration_s": 60,
+        "start_rps": 80,
+        "end_rps": 80
+      },
+      {
+        "name": "flash",
+        "duration_s": 90,
+        "start_rps": 650,
+        "end_rps": 650
+      },
+      {
+        "name": "recovery",
+        "duration_s": 120,
+        "start_rps": 180,
+        "end_rps": 120
+      }
+    ]
+  },
+  "sudden_drop": {
+    "description": "Sustained heavy load followed by a sharp drop; measures scale-down delay and idle resource time.",
+    "seed": 104,
+    "noise_fraction": 0.03,
+    "phases": [
+      {
+        "name": "high",
+        "duration_s": 150,
+        "start_rps": 500,
+        "end_rps": 500
+      },
+      {
+        "name": "drop",
+        "duration_s": 1,
+        "start_rps": 80,
+        "end_rps": 80
+      },
+      {
+        "name": "low",
+        "duration_s": 240,
+        "start_rps": 80,
+        "end_rps": 80
+      }
+    ]
+  },
+  "repeated_bursts": {
+    "description": "Repeated high/low oscillation; measures HPA stability, scale churn and SLO behavior.",
+    "seed": 105,
+    "noise_fraction": 0.04,
+    "phases": [
+      {
+        "name": "base1",
+        "duration_s": 60,
+        "start_rps": 100,
+        "end_rps": 100
+      },
+      {
+        "name": "burst1",
+        "duration_s": 45,
+        "start_rps": 500,
+        "end_rps": 500
+      },
+      {
+        "name": "base2",
+        "duration_s": 45,
+        "start_rps": 100,
+        "end_rps": 100
+      },
+      {
+        "name": "burst2",
+        "duration_s": 45,
+        "start_rps": 600,
+        "end_rps": 600
+      },
+      {
+        "name": "base3",
+        "duration_s": 45,
+        "start_rps": 100,
+        "end_rps": 100
+      },
+      {
+        "name": "burst3",
+        "duration_s": 45,
+        "start_rps": 450,
+        "end_rps": 450
+      },
+      {
+        "name": "base4",
+        "duration_s": 75,
+        "start_rps": 100,
+        "end_rps": 100
+      }
+    ]
+  }
+}
