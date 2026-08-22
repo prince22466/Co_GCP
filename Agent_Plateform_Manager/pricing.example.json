@@ -1,0 +1,9 @@
+{
+  "notes": "Fill these with current prices for your selected GCP region before using dollar-cost comparison. Usage comparison works without them.",
+  "gke_autopilot_vcpu_hour": null,
+  "gke_autopilot_gib_hour": null,
+  "gke_cluster_hour": null,
+  "mig_e2_highcpu_2_vm_hour": null,
+  "agent_controller_vm_hour": null,
+  "load_balancer_hour": null
+}

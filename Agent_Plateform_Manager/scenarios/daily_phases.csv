@@ -1,0 +1,9 @@
+phase,duration_seconds,start_rps,end_rps,noise_fraction
+night_low,240,35,50,0.08
+morning_ramp,180,50,300,0.10
+morning_busy,180,300,250,0.12
+lunch_spike,90,250,520,0.10
+afternoon,210,280,320,0.10
+evening_ramp,180,320,650,0.12
+evening_peak,180,650,560,0.10
+late_drop,180,560,60,0.12
