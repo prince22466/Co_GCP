@@ -1,0 +1,64 @@
+{
+  "slo_p99_ms": 500.0,
+  "slo_max_error_rate": 0.01,
+  "gke": {
+    "summary": {
+      "wall_seconds": 10,
+      "requests_attempted": 100,
+      "requests_successful": 99,
+      "requests_failed": 1,
+      "success_rate": 0.99,
+      "latency_ms": {
+        "p50": 20,
+        "p95": 100,
+        "p99": 200
+      }
+    },
+    "usage": {
+      "unit_hours": 0.006944444444444444,
+      "vcpu_hours": 0.013888888888888888,
+      "gib_hours": 0.013888888888888888,
+      "peak_units": 2.0,
+      "mean_units": 1.6666666666666665,
+      "observed_scale_changes": 1
+    },
+    "estimated_cost": null,
+    "cost_per_million_successful": null,
+    "slo": {
+      "seconds_evaluated": 2,
+      "seconds_violating": 1,
+      "violation_fraction": 0.5
+    },
+    "p99_slo_met": true
+  },
+  "agent": {
+    "summary": {
+      "wall_seconds": 10,
+      "requests_attempted": 100,
+      "requests_successful": 99,
+      "requests_failed": 1,
+      "success_rate": 0.99,
+      "latency_ms": {
+        "p50": 20,
+        "p95": 100,
+        "p99": 200
+      }
+    },
+    "usage": {
+      "unit_hours": 0.006944444444444444,
+      "vcpu_hours": 0.013888888888888888,
+      "gib_hours": 0.013888888888888888,
+      "peak_units": 2.0,
+      "mean_units": 1.6666666666666665,
+      "observed_scale_changes": 1
+    },
+    "estimated_cost": null,
+    "cost_per_million_successful": null,
+    "slo": {
+      "seconds_evaluated": 2,
+      "seconds_violating": 1,
+      "violation_fraction": 0.5
+    },
+    "p99_slo_met": true
+  }
+}
