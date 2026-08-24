@@ -3,7 +3,5 @@ pricing.json
 .venv/
 __pycache__/
 *.pyc
-results/*
-!results/.gitkeep
 .state/*
 !.state/.gitkeep
