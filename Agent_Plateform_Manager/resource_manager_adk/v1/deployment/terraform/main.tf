@@ -191,6 +191,18 @@ resource "google_compute_region_instance_group_manager" "target" {
     port = 8080
   }
 
+  # Apply instance-template changes through Terraform. The regional MIG creates
+  # a replacement before removing the old VM, then waits for it to be ready.
+  update_policy {
+    type                           = "PROACTIVE"
+    minimal_action                 = "REPLACE"
+    most_disruptive_allowed_action = "REPLACE"
+    replacement_method             = "SUBSTITUTE"
+    max_surge_fixed                = 3
+    max_unavailable_fixed          = 0
+    min_ready_sec                  = 30
+  }
+
   # After initial creation, the ADK agent owns target size. Terraform must not
   # undo a live scaling decision on the next apply.
   lifecycle {

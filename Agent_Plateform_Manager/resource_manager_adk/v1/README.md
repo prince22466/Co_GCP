@@ -121,6 +121,10 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
+The MIG uses a proactive Terraform-managed update policy. When the instance
+template changes, `terraform apply` rolls the workload VMs onto the new
+template; no separate `gcloud` replacement command is required.
+
 This first deployment is paused and dry-run. Test the authenticated endpoint or
 temporarily enable the scheduler while leaving `enable_live_scaling = false`.
 Inspect the Cloud Run logs and verify the observed MIG and CPU values.
