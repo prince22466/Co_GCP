@@ -1,0 +1,14 @@
+project_id    = "your-real-project-id"
+region        = "europe-central2"
+mig_name      = "arm-web-mig"
+agent_version = "v1"
+
+# One unit matches the baseline application allocation: 2 vCPU and about 2 GiB.
+mig_machine_type = "e2-highcpu-2"
+min_units        = 1
+max_units        = 4
+
+# Safe rollout defaults. Validate a manual dry-run before changing these.
+scheduler_paused           = true
+enable_live_scaling        = false
+exclusive_scaler_confirmed = false

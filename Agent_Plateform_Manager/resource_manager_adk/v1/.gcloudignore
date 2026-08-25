@@ -1,0 +1,11 @@
+.git
+.pytest_cache
+.terraform
+.venv
+*.egg-info
+*.pyc
+__pycache__
+deployment
+resource_manager/.env
+tests
+
