@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Stage-1 GKE benchmark runner.
+Stage-1 GKE and ADK-managed Compute Engine benchmark runner.
 
 Responsibilities:
-  * read the GKE endpoint and settings from Terraform outputs
+  * read platform endpoints and settings from their Terraform outputs
   * replay a deterministic open-loop HTTP workload
-  * sample Deployment/HPA/Pod CPU+memory metrics
+  * reset and sample either GKE/HPA or regional MIG capacity
   * save one self-contained dataset for every scenario run
 
 Requires:
   * gcloud + kubectl + terraform in PATH
   * aiohttp (pip install -r experiment-requirements.txt)
-  * current gcloud authentication with access to the Terraform-created GKE cluster
+  * current gcloud authentication with access to the selected deployments
 """
 
 from __future__ import annotations
@@ -34,19 +34,27 @@ import aiohttp
 
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_TERRAFORM_DIR = ROOT / "terraform"
+DEFAULT_GKE_TERRAFORM_DIR = ROOT / "terraform"
+DEFAULT_AGENT_TERRAFORM_DIR = (
+    ROOT / "resource_manager_adk" / "v1" / "deployment" / "terraform"
+)
 DEFAULT_SCENARIOS = ROOT / "scenarios" / "stage1.json"
-DEFAULT_RESULTS = ROOT / "results" / "gke"
+DEFAULT_RESULTS = ROOT / "results"
 
 
 def run_cmd(args: list[str], *, cwd: Path | None = None, check: bool = True) -> str:
-    proc = subprocess.run(
-        args,
-        cwd=str(cwd) if cwd else None,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        proc = subprocess.run(
+            args,
+            cwd=str(cwd) if cwd else None,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"required command is not installed or not in PATH: {args[0]}"
+        ) from exc
     if check and proc.returncode != 0:
         raise RuntimeError(
             f"command failed ({proc.returncode}): {' '.join(args)}\n{proc.stderr.strip()}"
@@ -54,7 +62,7 @@ def run_cmd(args: list[str], *, cwd: Path | None = None, check: bool = True) -> 
     return proc.stdout
 
 
-def json_cmd(args: list[str], *, cwd: Path | None = None) -> dict[str, Any]:
+def json_cmd(args: list[str], *, cwd: Path | None = None) -> Any:
     return json.loads(run_cmd(args, cwd=cwd))
 
 
@@ -75,6 +83,18 @@ def percentile(values: list[float], p: float) -> float | None:
 def terraform_outputs(terraform_dir: Path) -> dict[str, Any]:
     raw = json_cmd(["terraform", "output", "-json"], cwd=terraform_dir)
     return {key: value["value"] for key, value in raw.items()}
+
+
+def require_outputs(
+    outputs: dict[str, Any], required: set[str], terraform_dir: Path
+) -> None:
+    missing = sorted(required - outputs.keys())
+    if missing:
+        raise RuntimeError(
+            f"Terraform state in {terraform_dir} is missing outputs: "
+            + ", ".join(missing)
+            + ". Apply the current Terraform configuration before running the experiment."
+        )
 
 
 def configure_kubectl(outputs: dict[str, Any]) -> None:
@@ -98,6 +118,42 @@ def kubectl_json(args: list[str]) -> dict[str, Any]:
 
 def kubectl(args: list[str]) -> str:
     return run_cmd(["kubectl", *args])
+
+
+def mig_manager(outputs: dict[str, Any]) -> dict[str, Any]:
+    return json_cmd(
+        [
+            "gcloud",
+            "compute",
+            "instance-groups",
+            "managed",
+            "describe",
+            str(outputs["mig_name"]),
+            "--project",
+            str(outputs["project_id"]),
+            "--region",
+            str(outputs["region"]),
+            "--format=json",
+        ]
+    )
+
+
+def mig_instances(outputs: dict[str, Any]) -> list[dict[str, Any]]:
+    return json_cmd(
+        [
+            "gcloud",
+            "compute",
+            "instance-groups",
+            "managed",
+            "list-instances",
+            str(outputs["mig_name"]),
+            "--project",
+            str(outputs["project_id"]),
+            "--region",
+            str(outputs["region"]),
+            "--format=json",
+        ]
+    )
 
 
 def parse_cpu_cores(quantity: str) -> float:
@@ -232,6 +288,123 @@ async def wait_for_one_replica(
         f"deployment did not return to one stable replica within {timeout_s}s; "
         "HPA default scale-down stabilization can make resets take several minutes"
     )
+
+
+def resize_mig(outputs: dict[str, Any], size: int) -> None:
+    run_cmd(
+        [
+            "gcloud",
+            "compute",
+            "instance-groups",
+            "managed",
+            "resize",
+            str(outputs["mig_name"]),
+            "--project",
+            str(outputs["project_id"]),
+            "--region",
+            str(outputs["region"]),
+            "--size",
+            str(size),
+            "--quiet",
+        ]
+    )
+
+
+def mig_capacity_snapshot(
+    manager: dict[str, Any], instances: list[dict[str, Any]]
+) -> dict[str, Any]:
+    target = int(manager.get("targetSize", 0) or 0)
+    allocated = len(instances)
+    ready = sum(
+        1
+        for item in instances
+        if str(item.get("instanceStatus", "")).upper() == "RUNNING"
+        and str(item.get("currentAction", "NONE") or "NONE").upper()
+        in {"NONE", "0"}
+    )
+    pending = any(
+        str(item.get("currentAction", "NONE") or "NONE").upper()
+        not in {"NONE", "0"}
+        for item in instances
+    )
+    return {
+        "target_units": target,
+        "allocated_units": allocated,
+        "ready_units": ready,
+        "pending_actions": pending,
+    }
+
+
+async def wait_for_mig_minimum(
+    outputs: dict[str, Any], timeout_s: int
+) -> None:
+    minimum = int(outputs["min_units"])
+    await asyncio.to_thread(resize_mig, outputs, minimum)
+    started = time.monotonic()
+    consecutive = 0
+
+    while time.monotonic() - started < timeout_s:
+        manager, instances = await asyncio.gather(
+            asyncio.to_thread(mig_manager, outputs),
+            asyncio.to_thread(mig_instances, outputs),
+        )
+        snapshot = mig_capacity_snapshot(manager, instances)
+        stable = (
+            snapshot["target_units"] == minimum
+            and snapshot["allocated_units"] == minimum
+            and snapshot["ready_units"] == minimum
+            and not snapshot["pending_actions"]
+        )
+        if stable:
+            consecutive += 1
+            if consecutive >= 3:
+                return
+        else:
+            consecutive = 0
+        await asyncio.sleep(10)
+
+    raise TimeoutError(
+        f"MIG did not return to {minimum} stable instance(s) within {timeout_s}s"
+    )
+
+
+async def wait_for_agent_cooldown(outputs: dict[str, Any]) -> None:
+    object_uri = f"gs://{outputs['state_bucket']}/last-resize.json"
+    try:
+        payload = json.loads(
+            await asyncio.to_thread(
+                run_cmd, ["gcloud", "storage", "cat", object_uri]
+            )
+        )
+    except (RuntimeError, json.JSONDecodeError, KeyError, ValueError):
+        return
+
+    timestamp_text = str(payload["timestamp_utc"]).replace("Z", "+00:00")
+    last_resize = datetime.fromisoformat(timestamp_text)
+    if last_resize.tzinfo is None:
+        last_resize = last_resize.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - last_resize).total_seconds()
+    remaining = max(0.0, float(outputs["cooldown_seconds"]) - elapsed)
+    if remaining > 0:
+        print(f"Waiting {remaining:.1f}s for the previous agent cooldown to expire...")
+        await asyncio.sleep(remaining + 1.0)
+
+
+async def wait_for_http_health(base_url: str, timeout_s: int) -> None:
+    deadline = time.monotonic() + timeout_s
+    url = f"{base_url.rstrip('/')}/healthz"
+    async with aiohttp.ClientSession() as session:
+        while time.monotonic() < deadline:
+            try:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=5.0)
+                ) as response:
+                    if 200 <= response.status < 300:
+                        return
+            except Exception:
+                pass
+            await asyncio.sleep(5)
+    raise TimeoutError(f"workload health endpoint did not become ready: {url}")
 
 
 async def one_request(
@@ -379,6 +552,67 @@ async def collect_gke_metrics(
                     "actual_memory_gib": usage_memory,
                     "requested_cpu_cores": current * pod_cpu,
                     "requested_memory_gib": current * pod_memory_gib,
+                    "scale_direction": scale_direction,
+                }
+            )
+        except Exception as exc:
+            rows.append(
+                {
+                    "relative_second": rel_s,
+                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                    "collector_error": str(exc),
+                }
+            )
+
+        elapsed = time.monotonic() - sample_started
+        sleep_for = max(0.0, interval_s - elapsed)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=sleep_for)
+        except asyncio.TimeoutError:
+            pass
+
+    return rows
+
+
+async def collect_agent_metrics(
+    outputs: dict[str, Any],
+    interval_s: float,
+    stop: asyncio.Event,
+    experiment_start: float,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    last_target: int | None = None
+    unit_vcpu = float(outputs["workload_unit_vcpu"])
+    unit_memory_gib = float(outputs["workload_unit_memory_gib"])
+
+    while not stop.is_set():
+        sample_started = time.monotonic()
+        rel_s = time.perf_counter() - experiment_start
+
+        try:
+            manager, instances = await asyncio.gather(
+                asyncio.to_thread(mig_manager, outputs),
+                asyncio.to_thread(mig_instances, outputs),
+            )
+            snapshot = mig_capacity_snapshot(manager, instances)
+            target = int(snapshot["target_units"])
+            allocated = int(snapshot["allocated_units"])
+
+            scale_direction = ""
+            if last_target is not None:
+                if target > last_target:
+                    scale_direction = "up"
+                elif target < last_target:
+                    scale_direction = "down"
+            last_target = target
+
+            rows.append(
+                {
+                    "relative_second": rel_s,
+                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                    **snapshot,
+                    "allocated_vcpu": allocated * unit_vcpu,
+                    "allocated_memory_gib": allocated * unit_memory_gib,
                     "scale_direction": scale_direction,
                 }
             )
@@ -570,34 +804,107 @@ def summarize_gke(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def write_agent_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
+    fieldnames = [
+        "relative_second",
+        "timestamp_utc",
+        "target_units",
+        "allocated_units",
+        "ready_units",
+        "pending_actions",
+        "allocated_vcpu",
+        "allocated_memory_gib",
+        "scale_direction",
+        "collector_error",
+    ]
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key) for key in fieldnames})
+
+
+def summarize_agent(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    valid = [r for r in rows if "target_units" in r]
+    if not valid:
+        return {"samples": 0}
+
+    target_values = [float(r["target_units"]) for r in valid]
+    allocated_values = [float(r["allocated_units"]) for r in valid]
+    scale_up = sum(1 for r in valid if r.get("scale_direction") == "up")
+    scale_down = sum(1 for r in valid if r.get("scale_direction") == "down")
+    first_scale_up = next(
+        (r["relative_second"] for r in valid if r.get("scale_direction") == "up"),
+        None,
+    )
+
+    allocated_vcpu_seconds = 0.0
+    allocated_gib_seconds = 0.0
+    for left, right in zip(valid, valid[1:]):
+        dt = max(0.0, float(right["relative_second"]) - float(left["relative_second"]))
+        allocated_vcpu_seconds += float(left["allocated_vcpu"]) * dt
+        allocated_gib_seconds += float(left["allocated_memory_gib"]) * dt
+
+    return {
+        "samples": len(valid),
+        "mean_target_units": statistics.fmean(target_values),
+        "peak_target_units": max(target_values),
+        "mean_allocated_units": statistics.fmean(allocated_values),
+        "peak_allocated_units": max(allocated_values),
+        "scale_up_events": scale_up,
+        "scale_down_events": scale_down,
+        "first_scale_up_second": first_scale_up,
+        "allocated_vcpu_seconds": allocated_vcpu_seconds,
+        "allocated_gib_seconds": allocated_gib_seconds,
+        "allocated_vcpu_hours": allocated_vcpu_seconds / 3600.0,
+        "allocated_gib_hours": allocated_gib_seconds / 3600.0,
+    }
+
+
 async def run_one(
+    system: str,
     scenario_name: str,
     scenario: dict[str, Any],
     run_index: int,
     outputs: dict[str, Any],
     args: argparse.Namespace,
 ) -> Path:
-    namespace = str(outputs["namespace"])
-    deployment = str(outputs["deployment_name"])
-    hpa_name = str(outputs["hpa_name"])
-    base_url = str(outputs["application_url"]).rstrip("/")
-    target = f"{base_url}/work?cpu_ms={int(outputs['work_cpu_ms'])}"
+    if system == "gke":
+        namespace = str(outputs["namespace"])
+        deployment = str(outputs["deployment_name"])
+        hpa_name = str(outputs["hpa_name"])
+        base_url = str(outputs["application_url"]).rstrip("/")
+        cpu_ms = int(outputs["work_cpu_ms"])
+        await wait_for_one_replica(
+            namespace=namespace,
+            deployment=deployment,
+            hpa=hpa_name,
+            timeout_s=args.reset_timeout,
+        )
+    else:
+        base_url = str(outputs["workload_url"]).rstrip("/")
+        cpu_ms = int(outputs["workload_default_cpu_ms"])
+        await wait_for_mig_minimum(outputs, args.reset_timeout)
+        await wait_for_agent_cooldown(outputs)
 
-    await wait_for_one_replica(
-        namespace=namespace,
-        deployment=deployment,
-        hpa=hpa_name,
-        timeout_s=args.reset_timeout,
-    )
+    await wait_for_http_health(base_url, args.reset_timeout)
+    target = f"{base_url}/work?cpu_ms={cpu_ms}"
 
     trace = expand_scenario(scenario_name, scenario, args.rps_scale)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = args.results_dir / scenario_name / f"{run_id}_run{run_index:02d}"
+    out = (
+        args.results_dir
+        / system
+        / scenario_name
+        / f"{run_id}_run{run_index:02d}"
+    )
     out.mkdir(parents=True, exist_ok=False)
 
     write_trace(out / "trace.csv", trace)
 
     metadata = {
+        "system": system,
+        "agent_version": outputs.get("agent_version") if system == "agent" else None,
         "scenario": scenario_name,
         "description": scenario.get("description"),
         "run_index": run_index,
@@ -611,45 +918,61 @@ async def run_one(
 
     experiment_start = time.perf_counter()
     stop = asyncio.Event()
-    collector_task = asyncio.create_task(
-        collect_gke_metrics(
-            namespace=namespace,
-            deployment=deployment,
-            hpa_name=hpa_name,
-            pod_cpu=float(outputs["pod_cpu"]),
-            pod_memory_gib=float(outputs["pod_memory_gib"]),
-            interval_s=args.metrics_interval,
-            stop=stop,
-            experiment_start=experiment_start,
+    if system == "gke":
+        collector_task = asyncio.create_task(
+            collect_gke_metrics(
+                namespace=namespace,
+                deployment=deployment,
+                hpa_name=hpa_name,
+                pod_cpu=float(outputs["pod_cpu"]),
+                pod_memory_gib=float(outputs["pod_memory_gib"]),
+                interval_s=args.metrics_interval,
+                stop=stop,
+                experiment_start=experiment_start,
+            )
         )
-    )
+    else:
+        collector_task = asyncio.create_task(
+            collect_agent_metrics(
+                outputs=outputs,
+                interval_s=args.metrics_interval,
+                stop=stop,
+                experiment_start=experiment_start,
+            )
+        )
 
-    stats, wall_seconds = await replay_workload(
-        target=target,
-        trace=trace,
-        timeout_s=args.request_timeout,
-        max_connections=args.max_connections,
-    )
+    try:
+        stats, wall_seconds = await replay_workload(
+            target=target,
+            trace=trace,
+            timeout_s=args.request_timeout,
+            max_connections=args.max_connections,
+        )
 
-    # Keep observing briefly after load ends so scale decisions immediately after the trace
-    # are captured in the same run.
-    if args.post_observe > 0:
-        await asyncio.sleep(args.post_observe)
-
-    stop.set()
-    metrics_rows = await collector_task
+        # Capture scale decisions that occur immediately after the trace.
+        if args.post_observe > 0:
+            await asyncio.sleep(args.post_observe)
+    finally:
+        stop.set()
+        metrics_rows = await collector_task
 
     traffic_summary = write_traffic(out / "traffic.csv", trace, stats)
-    write_gke_metrics(out / "gke_metrics.csv", metrics_rows)
-    gke_summary = summarize_gke(metrics_rows)
+    if system == "gke":
+        write_gke_metrics(out / "gke_metrics.csv", metrics_rows)
+        platform_summary = summarize_gke(metrics_rows)
+    else:
+        write_agent_metrics(out / "agent_metrics.csv", metrics_rows)
+        platform_summary = summarize_agent(metrics_rows)
 
     summary = {
+        "system": system,
+        "agent_version": outputs.get("agent_version") if system == "agent" else None,
         "scenario": scenario_name,
         "run_index": run_index,
         "trace_seconds": len(trace),
         "wall_seconds": wall_seconds,
         "performance": traffic_summary,
-        "gke": gke_summary,
+        system: platform_summary,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
 
@@ -659,9 +982,6 @@ async def run_one(
 
 
 async def async_main(args: argparse.Namespace) -> None:
-    outputs = terraform_outputs(args.terraform_dir)
-    configure_kubectl(outputs)
-
     scenarios = load_scenarios(args.scenarios)
     if args.scenario == "all":
         selected = list(scenarios)
@@ -673,23 +993,91 @@ async def async_main(args: argparse.Namespace) -> None:
             )
         selected = [args.scenario]
 
+    selected_systems = [args.system] if args.system != "both" else ["gke", "agent"]
+    outputs_by_system: dict[str, dict[str, Any]] = {}
+
+    if "gke" in selected_systems:
+        gke_outputs = terraform_outputs(args.gke_terraform_dir)
+        require_outputs(
+            gke_outputs,
+            {
+                "cluster_name",
+                "region",
+                "namespace",
+                "deployment_name",
+                "hpa_name",
+                "application_url",
+                "work_cpu_ms",
+                "pod_cpu",
+                "pod_memory_gib",
+            },
+            args.gke_terraform_dir,
+        )
+        configure_kubectl(gke_outputs)
+        outputs_by_system["gke"] = gke_outputs
+
+    if "agent" in selected_systems:
+        agent_outputs = terraform_outputs(args.agent_terraform_dir)
+        require_outputs(
+            agent_outputs,
+            {
+                "project_id",
+                "agent_version",
+                "region",
+                "mig_name",
+                "workload_url",
+                "workload_default_cpu_ms",
+                "workload_unit_vcpu",
+                "workload_unit_memory_gib",
+                "min_units",
+                "max_units",
+                "cooldown_seconds",
+                "state_bucket",
+                "scheduler_state",
+                "scaling_mode",
+            },
+            args.agent_terraform_dir,
+        )
+        scheduler_enabled = str(agent_outputs["scheduler_state"]).upper() == "ENABLED"
+        scaling_live = str(agent_outputs["scaling_mode"]).upper() == "LIVE"
+        if not args.allow_agent_dry_run and not (scheduler_enabled and scaling_live):
+            raise SystemExit(
+                "Agent experiments require scheduler_state=ENABLED and "
+                "scaling_mode=LIVE. Apply the live Terraform settings or pass "
+                "--allow-agent-dry-run for a non-scaling control run."
+            )
+        outputs_by_system["agent"] = agent_outputs
+
     for scenario_name in selected:
         for run_index in range(1, args.runs + 1):
-            print(
-                f"\n=== scenario={scenario_name} "
-                f"run={run_index}/{args.runs} ==="
-            )
-            await run_one(
-                scenario_name,
-                scenarios[scenario_name],
-                run_index,
-                outputs,
-                args,
-            )
+            run_systems = list(selected_systems)
+            if args.system == "both" and run_index % 2 == 0:
+                run_systems.reverse()
+            for system in run_systems:
+                print(
+                    f"\n=== system={system} scenario={scenario_name} "
+                    f"run={run_index}/{args.runs} ==="
+                )
+                await run_one(
+                    system,
+                    scenario_name,
+                    scenarios[scenario_name],
+                    run_index,
+                    outputs_by_system[system],
+                    args,
+                )
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Replay deterministic workloads against GKE, the ADK-managed MIG, or both."
+    )
+    parser.add_argument(
+        "--system",
+        choices=["gke", "agent", "both"],
+        default="gke",
+        help="Target platform. 'both' runs the same trace sequentially against each platform.",
+    )
     parser.add_argument(
         "--scenario",
         default="daily_normal",
@@ -703,9 +1091,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reset-timeout", type=int, default=420)
     parser.add_argument("--post-observe", type=int, default=30)
     parser.add_argument(
+        "--gke-terraform-dir",
         "--terraform-dir",
+        dest="gke_terraform_dir",
         type=Path,
-        default=DEFAULT_TERRAFORM_DIR,
+        default=DEFAULT_GKE_TERRAFORM_DIR,
+        help="GKE Terraform directory; --terraform-dir is retained as an alias.",
+    )
+    parser.add_argument(
+        "--agent-terraform-dir",
+        type=Path,
+        default=DEFAULT_AGENT_TERRAFORM_DIR,
+        help="ADK and managed-MIG Terraform directory.",
     )
     parser.add_argument(
         "--scenarios",
@@ -717,7 +1114,19 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_RESULTS,
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--allow-agent-dry-run",
+        action="store_true",
+        help="Allow an agent run when the Scheduler is paused or live scaling is disabled.",
+    )
+    args = parser.parse_args()
+    if args.runs < 1:
+        parser.error("--runs must be at least 1")
+    if args.rps_scale <= 0:
+        parser.error("--rps-scale must be greater than 0")
+    if args.metrics_interval <= 0:
+        parser.error("--metrics-interval must be greater than 0")
+    return args
 
 
 if __name__ == "__main__":
