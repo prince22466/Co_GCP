@@ -1,478 +1,318 @@
-# Agentic Cloud Resource Manager — Stage 1
+# Agent Platform Manager
 
-Stage 1 is a controlled GCP experiment comparing:
+This repository runs a controlled GCP experiment comparing two scaling systems:
 
-1. **GKE Autopilot + HPA**
-2. **Compute Engine regional MIG + custom resource controller**
+1. **GKE Autopilot with a CPU-based Horizontal Pod Autoscaler (HPA)**
+2. **A regional Compute Engine managed instance group (MIG) controlled by Resource Manager ADK v1**
 
-Both systems run the **same Docker image**, receive the **same deterministic website traffic trace**, start from the **same minimum capacity**, and are capped at the same application resource envelope.
+Both systems build the same stateless web application from `app/`, receive the
+same deterministic open-loop workload, start at one resource unit, and are
+capped at four resource units.
 
-## Experimental question
+## Experiment design
 
-> Under the same website workload and maximum application compute budget, how do GKE Autopilot and a custom resource manager compare on latency, errors, scaling behavior, resource consumption, and estimated cost?
+One application resource unit is approximately:
 
-This stage intentionally uses a simple CPU-threshold controller. It establishes the benchmark harness before adding forecasting, multi-agent coordination, learning, or RL.
+- 2 vCPU
+- 2 GiB memory
 
----
+| Property | GKE case | Agent case |
+|---|---|---|
+| Compute unit | Pod requesting 2 vCPU / 2 GiB | `e2-highcpu-2` VM |
+| Initial units | 1 | 1 |
+| Maximum units | 4 | 4 |
+| Scaling controller | GKE HPA | ADK v1 on Cloud Run |
+| Live signal | Pod CPU utilization | Compute Engine CPU utilization |
+| Public endpoint | GCP load balancer | GCP HTTP load balancer |
 
-## Shared resource cap
+The application exposes `/work?cpu_ms=8`. Each request deliberately consumes
+approximately 8 ms of CPU, making scaling behavior observable without adding a
+database or another bottleneck.
 
-A resource unit is:
-
-- 2 application vCPU
-- ~2 GiB application memory
-
-Maximum = **4 units**:
-
-- **GKE:** max 4 Pods × 2 vCPU / 2 GiB = 8 vCPU / 8 GiB
-- **MIG:** max 4 `e2-highcpu-2` VMs ≈ 8 vCPU / 8 GiB
-
-GKE also has a namespace `ResourceQuota` limiting requested/limited CPU and memory to 8 CPU / 8 GiB.
-
-The agent controller enforces `MIG_MAX=4`.
-
-The small controller VM is *not* part of the application capacity cap; its cost is accounted for separately.
-
----
-
-## Workload
-
-`scenarios/daily_24m.csv` compresses a synthetic 24-hour website day into **24 minutes**.
-
-It contains 1-second offered-load targets and is generated from `daily_phases.csv` with a fixed random seed.
-
-Typical phases:
-
-- quiet night
-- morning ramp
-- morning traffic
-- lunch spike
-- afternoon
-- evening ramp
-- evening peak
-- late traffic collapse
-
-Peak traffic is about 700 requests/s.
-
-Each request calls:
-
-```text
-/work?cpu_ms=8
-```
-
-The web app deliberately burns approximately 8 ms of CPU per request so scaling behavior is visible without requiring a database or other external bottleneck.
-
-The load generator is **open-loop**: if the target becomes slow, it keeps offering the scheduled request rate rather than waiting for responses. This avoids making an overloaded server appear healthy simply because a closed-loop client slows down.
-
----
+The workload generator in `experiment.py` is open-loop: slow responses do not
+reduce the offered request rate. Scenario phases, durations, noise, and RPS are
+defined in `scenarios/stage1.json`.
 
 ## Repository layout
 
 ```text
-agentic-cloud-stage1/
-├── app/
-│   ├── app.py
-│   ├── Dockerfile
-│   └── requirements.txt
-├── agent/
-│   ├── controller.py
-│   ├── Dockerfile
-│   └── requirements.txt
-├── gke/
-│   ├── namespace.yaml
-│   ├── quota.yaml
-│   ├── deployment.yaml.tpl
-│   ├── service.yaml
-│   └── hpa.yaml
-├── mig/
-│   ├── startup.sh.tpl
-│   └── controller-startup.sh.tpl
-├── loadgen/
-│   ├── run.py
-│   └── requirements.txt
-├── scenarios/
-│   ├── daily_phases.csv
-│   ├── daily_24m.csv
-│   └── make_trace.py
-├── scripts/
-│   ├── setup_gcp.sh
-│   ├── deploy_gke.sh
-│   ├── deploy_mig.sh
-│   ├── run_experiment.sh
-│   ├── observe.py
-│   ├── compare.py
-│   ├── compare_last.sh
-│   └── cleanup.sh
-├── .env.example
-└── pricing.example.json
+Agent_Platform_Manager/
+|-- app/                              # Shared benchmark web application
+|-- terraform/                        # GKE Autopilot deployment
+|-- resource_manager_adk/
+|   |-- README.md                     # Agent release catalog
+|   `-- v1/                           # Resource Manager ADK release 1.0.0
+|       |-- resource_manager/         # Agent, policy, tools, and Cloud Run API
+|       |-- deployment/terraform/     # Agent, MIG, and load-balancer deployment
+|       |-- tests/
+|       |-- Dockerfile
+|       `-- pyproject.toml
+|-- scenarios/
+|   `-- stage1.json                   # Active experiment scenarios
+|-- tests/                            # Unified runner tests
+|-- experiment.py                     # GKE / agent / both experiment runner
+`-- experiment-requirements.txt
 ```
 
----
+## Prerequisites
 
-# 1. Prerequisites
+Google Cloud Shell is the simplest deployment environment. You need:
 
-The easiest place to run the orchestration scripts is **Google Cloud Shell**.
-
-You need:
-
-- a GCP project with billing enabled
-- `gcloud`
+- A GCP project with billing enabled
+- Terraform 1.7 or newer
+- `gcloud` authenticated to the project
 - `kubectl`
-- Python 3
-- permission to create Compute Engine, GKE, IAM service-account, Artifact Registry, Cloud Build, and load-balancer resources
+- Python 3.11 or newer
+- Permission to enable APIs and create GKE, Compute Engine, Cloud Run,
+  Cloud Scheduler, IAM, Artifact Registry, Cloud Build, Storage, Monitoring,
+  and load-balancer resources
 
-From the repository root:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set:
+Install the experiment dependency from the repository root:
 
 ```bash
-PROJECT_ID=your-real-project-id
+python3 -m pip install -r experiment-requirements.txt
 ```
 
-The default region is Warsaw:
+The default region is `europe-central2`.
+
+## Deploy the GKE case
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Set the real project ID in `terraform.tfvars`, then deploy:
+
+```bash
+terraform init
+terraform fmt -check
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+cd ..
+```
+
+Useful outputs:
+
+```bash
+terraform -chdir=terraform output cluster_name
+terraform -chdir=terraform output application_url
+```
+
+This stack builds the application image and creates the Autopilot cluster,
+namespace, resource quota, deployment, HPA, load-balancer service, and external
+IP.
+
+## Deploy the Agent v1 case
+
+```bash
+cd resource_manager_adk/v1/deployment/terraform
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Set the real project ID and review the region, MIG name, capacity bounds, CPU
+thresholds, cooldown, model, and machine type. Then deploy the safe initial
+configuration:
+
+```bash
+terraform init
+terraform fmt -check
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+cd ../../../..
+```
+
+This stack creates:
+
+- The shared workload container image
+- A Container-Optimized OS instance template
+- A regional MIG initialized at `min_units`
+- The workload health check, firewall, load balancer, and external IP
+- Resource Manager ADK v1 as an authenticated Cloud Run service
+- A private Cloud Storage bucket for durable cooldown state
+- A Cloud Scheduler job that invokes the agent
+- Least-privilege runtime and scheduler identities
+
+It does not create a GKE cluster, native Compute Engine autoscaler, or legacy
+controller VM. Terraform ignores MIG `target_size` after creation so it does
+not reverse live decisions made by the agent.
+
+The initial deployment is intentionally paused and dry-run:
+
+```hcl
+scheduler_paused           = true
+enable_live_scaling        = false
+exclusive_scaler_confirmed = false
+```
+
+Validate agent observations in dry-run mode first. Before an agent scaling
+experiment, confirm that no other system can resize the MIG, then apply:
+
+```hcl
+scheduler_paused           = false
+enable_live_scaling        = true
+exclusive_scaler_confirmed = true
+```
+
+Useful outputs:
+
+```bash
+terraform -chdir=resource_manager_adk/v1/deployment/terraform output agent_version
+terraform -chdir=resource_manager_adk/v1/deployment/terraform output workload_url
+terraform -chdir=resource_manager_adk/v1/deployment/terraform output service_url
+terraform -chdir=resource_manager_adk/v1/deployment/terraform output scaling_mode
+terraform -chdir=resource_manager_adk/v1/deployment/terraform output scheduler_state
+```
+
+See `resource_manager_adk/v1/README.md` for the detailed safety and deployment
+notes.
+
+## Run experiments
+
+Run experiments from the repository root. The runner reads endpoints and
+settings from the applied Terraform states.
+
+GKE only:
+
+```bash
+python3 experiment.py \
+  --system gke \
+  --scenario daily_normal \
+  --rps-scale 0.2
+```
+
+Agent-managed MIG only:
+
+```bash
+python3 experiment.py \
+  --system agent \
+  --scenario daily_normal \
+  --rps-scale 0.2
+```
+
+Both systems with the same deterministic trace:
+
+```bash
+python3 experiment.py \
+  --system both \
+  --scenario daily_normal \
+  --rps-scale 0.2 \
+  --runs 2
+```
+
+`both` runs the platforms sequentially so they do not compete for workload
+generator capacity. Odd repetitions run GKE then agent; even repetitions run
+agent then GKE to reduce ordering bias.
+
+Before an agent run, the runner:
+
+1. Resets the MIG to `min_units`.
+2. Waits for the target, allocated, and ready instance counts to stabilize.
+3. Waits for any stored scaling cooldown to expire.
+4. Verifies the workload `/healthz` endpoint.
+5. Confirms Scheduler is enabled and scaling mode is live.
+
+Use `--allow-agent-dry-run` only when intentionally measuring a non-scaling
+control.
+
+Available scenarios are:
 
 ```text
-europe-central2
+daily_normal
+morning_ramp
+flash_crowd
+sudden_drop
+repeated_bursts
 ```
 
-Install the load-generator dependency:
+Use `--scenario all` to run every scenario.
 
-```bash
-python3 -m pip install -r loadgen/requirements.txt
-```
-
----
-
-# 2. Build images and enable GCP APIs
-
-```bash
-./scripts/setup_gcp.sh
-```
-
-This enables the required APIs, creates an Artifact Registry repository, and builds:
-
-```text
-arm-web:stage1
-arm-controller:stage1
-```
-
----
-
-# 3. Deploy GKE Autopilot
-
-```bash
-./scripts/deploy_gke.sh
-```
-
-The deployment includes:
-
-- Autopilot cluster
-- one initial web Pod
-- HPA target CPU = 60%
-- min replicas = 1
-- max replicas = 4
-- 2 vCPU / 2 GiB per Pod
-- ResourceQuota = 8 vCPU / 8 GiB
-- external GCE HTTP Ingress / application load balancer
-
-The target URL is saved to:
-
-```text
-.state/gke_url
-```
-
-Inspect it with:
-
-```bash
-cat .state/gke_url
-```
-
----
-
-# 4. Deploy the agent-managed Compute Engine system
-
-```bash
-./scripts/deploy_mig.sh
-```
-
-This creates:
-
-- regional managed instance group
-- `e2-highcpu-2` application VMs
-- initial MIG size = 1
-- maximum controller size = 4
-- global HTTP load balancer
-- health check
-- controller service account
-- small controller VM
-- controller container
-
-The Compute Engine autoscaler is intentionally not used. The custom controller owns the MIG target size.
-
-The target is saved to:
-
-```text
-.state/mig_url
-```
-
-View controller decisions:
-
-```bash
-gcloud compute ssh arm-controller \
-  --zone europe-central2-a \
-  --command='docker logs -f arm-controller'
-```
-
-A decision resembles:
-
-```json
-{
-  "average_cpu": 0.73,
-  "action": "scale_up",
-  "target_size": 2,
-  "proposed_size": 3
-}
-```
-
-Stage-1 policy:
-
-```text
-CPU > 65% -> +1 resource unit
-CPU < 30% -> -1 resource unit
-otherwise  -> hold
-```
-
-with a 120-second cooldown.
-
----
-
-# 5. Run exactly the same scenario against GKE
-
-```bash
-./scripts/run_experiment.sh gke
-```
-
-Before the workload starts, the script resets application capacity to one resource unit and waits for the configured warm-up period.
+## Results
 
 Results are written under:
 
 ```text
-results/gke/<timestamp>/
+results/gke/<scenario>/<timestamp>_runNN/
+results/agent/<scenario>/<timestamp>_runNN/
 ```
 
-including:
+Every run contains:
+
+- `metadata.json` - target, Terraform outputs, scenario settings, and agent version
+- `trace.csv` - exact offered RPS for every second
+- `traffic.csv` - requests, errors, latency percentiles, and scheduler lateness
+- `summary.json` - performance, SLO, capacity, and scaling summary
+- `gke_metrics.csv` or `agent_metrics.csv` - platform-specific capacity samples
+
+The default SLO evaluated by the runner is:
 
 ```text
-summary.json
-per_second.csv
-resources.csv
+per-second p99 latency <= 500 ms
+and error rate <= 1%
 ```
 
----
+The current runner reports resource usage but does not calculate invoice cost.
+Use GCP Billing Reports or Detailed Billing Export to BigQuery to attribute
+Cloud Run, Vertex AI, Compute Engine, load-balancing, and supporting-service
+costs. `pricing.example.json` is retained only as an optional manual-rate
+template.
 
-# 6. Run the same scenario against the custom agent
+## Validation
+
+Run the experiment-runner tests from the repository root:
 
 ```bash
-./scripts/run_experiment.sh agent
+python3 -m pytest tests/test_experiment.py
 ```
 
-Results go to:
-
-```text
-results/agent/<timestamp>/
-```
-
-The exact same `daily_24m.csv` is replayed.
-
-For stronger results, alternate run order across repetitions:
-
-```text
-Run 1: GKE -> Agent
-Run 2: Agent -> GKE
-Run 3: GKE -> Agent
-...
-```
-
-and run several repetitions rather than drawing conclusions from one trial.
-
----
-
-# 7. Compare the latest runs
-
-Without price inputs:
+Run the Agent v1 tests from its release directory:
 
 ```bash
-./scripts/compare_last.sh
+cd resource_manager_adk/v1
+python3 -m pip install -e ".[dev]"
+pytest
+cd ../..
 ```
 
-The comparison reports:
+Always run `terraform fmt -check`, `terraform validate`, and review a saved
+Terraform plan before applying either stack.
 
-- attempted requests
-- success rate
-- p50 / p95 / p99 latency
-- per-second SLO violation fraction
-- peak resource units
-- mean resource units
-- observed scaling changes
-- vCPU-hours
-- GiB-hours
+## Fairness controls
 
-Default SLO:
+- Both systems build the application from the same `app/` source.
+- Both receive the same deterministic trace and request endpoint.
+- Both start from one resource unit and allow at most four.
+- Both have an approximately 8-vCPU / 8-GiB maximum application envelope.
+- Both expose the application through a GCP HTTP load balancer.
+- Repeated `both` runs alternate platform order.
 
-```text
-p99 <= 500 ms
-error rate <= 1% per evaluated second
-```
+GKE and a VM MIG still differ in provisioning time, billing, orchestration,
+metric delay, and platform overhead. Those differences are part of the
+comparison and should be retained when interpreting results.
 
-Machine-readable output is written to:
+## Current limitations
 
-```text
-results/comparison.json
-```
+- Resource Manager v1 is a single ADK agent, not a multi-agent system.
+- The live agent policy uses Compute Engine CPU metrics only.
+- Monitoring and Scheduler delays affect agent reaction time.
+- The workload is CPU-bound and stateless, with no database or cache.
+- No Spot VMs, forecasting, reinforcement learning, or online training are used.
+- A single run is not statistically sufficient; use repeated, alternating runs.
+- Dollar-cost comparison requires billing data outside the experiment runner.
 
----
+## Cleanup
 
-# 8. Add current GCP prices
-
-Do **not** hard-code historical GCP prices into the experiment.
-
-Copy:
+These resources incur GCP charges. Destroy the Agent stack and GKE stack when
+they are no longer needed:
 
 ```bash
-cp pricing.example.json pricing.json
+terraform -chdir=resource_manager_adk/v1/deployment/terraform plan -destroy -out=tfplan-destroy
+terraform -chdir=resource_manager_adk/v1/deployment/terraform apply tfplan-destroy
+
+terraform -chdir=terraform plan -destroy -out=tfplan-destroy
+terraform -chdir=terraform apply tfplan-destroy
 ```
 
-Fill the current rates for your selected region:
-
-```json
-{
-  "gke_autopilot_vcpu_hour": 0.0,
-  "gke_autopilot_gib_hour": 0.0,
-  "gke_cluster_hour": 0.0,
-  "mig_e2_highcpu_2_vm_hour": 0.0,
-  "agent_controller_vm_hour": 0.0,
-  "load_balancer_hour": 0.0
-}
-```
-
-Then:
-
-```bash
-./scripts/compare_last.sh
-```
-
-It additionally calculates:
-
-- estimated run cost
-- estimated cost per 1 million successful requests
-
-The explicit pricing file makes the experiment reproducible even when cloud prices change.
-
----
-
-# Metrics interpretation
-
-Do not declare a winner using cost alone.
-
-A controller that turns servers off can produce an excellent infrastructure bill and terrible service.
-
-At minimum compare:
-
-```text
-cost
-success rate
-p99 latency
-SLO violation time
-vCPU-hours
-scaling events
-```
-
-A useful eventual objective is:
-
-```text
-minimum cost subject to SLO compliance
-```
-
-rather than simply minimum compute consumption.
-
----
-
-# Fairness controls
-
-Stage 1 deliberately controls the following variables:
-
-| Variable | GKE | Agent/MIG |
-|---|---|---|
-| Application image | same | same |
-| Request endpoint | same | same |
-| Traffic trace | same | same |
-| Initial resource units | 1 | 1 |
-| Resource unit | 2 vCPU / ~2 GiB | 2 vCPU / ~2 GiB |
-| Maximum units | 4 | 4 |
-| Maximum application CPU | 8 vCPU | 8 vCPU |
-| Maximum application memory | ~8 GiB | ~8 GiB |
-| Public traffic entry | GCP HTTP load balancer | GCP HTTP load balancer |
-
-Not everything is identical, by design. GKE Autopilot and a VM MIG have different provisioning, billing, orchestration, and scaling mechanics. Those differences are part of the platform comparison and should be documented when interpreting results.
-
----
-
-# Important Stage-1 limitations
-
-1. The custom controller is not yet a multi-agent system.
-2. It reacts to Compute Engine CPU metrics, which have monitoring delay.
-3. Workload is CPU-bound and stateless.
-4. No database is included.
-5. No cache is included.
-6. No Spot VMs are used.
-7. No predictive scaling is used.
-8. No RL or online training is used.
-9. Price comparison is an estimate based on supplied current rates, not Cloud Billing invoice reconciliation.
-10. One 24-minute run is not statistically sufficient; repeat experiments.
-
-These are intentional constraints for the benchmark foundation.
-
----
-
-# Stage 2 after this benchmark works
-
-The next controller can consume more signals:
-
-```text
-request rate
-CPU
-p99 latency
-rate-of-change of traffic
-current VM count
-provisioning delay
-```
-
-Then compare:
-
-```text
-GKE Autopilot + HPA
-vs
-Stage-1 CPU controller
-vs
-predictive agent
-vs
-multi-agent manager
-```
-
-Only after the benchmark is trustworthy should self-learning/RL be introduced.
-
----
-
-# Cleanup
-
-These resources incur GCP charges. Remove them when finished:
-
-```bash
-./scripts/cleanup.sh
-```
-
-The script intentionally keeps the Artifact Registry repository and IAM service accounts so images and configuration can be reused. Delete those separately if you no longer need them.
+Review both destroy plans carefully before applying them.
