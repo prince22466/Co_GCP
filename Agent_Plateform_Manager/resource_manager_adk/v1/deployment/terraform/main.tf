@@ -135,6 +135,12 @@ resource "google_compute_instance_template" "workload" {
     #!/bin/bash
     set -euo pipefail
 
+    # Container-Optimized OS mounts /root read-only. Keep Docker's temporary
+    # registry credentials in the writable stateful partition instead.
+    export DOCKER_CONFIG=/var/lib/arm-web-docker
+    mkdir -p "$DOCKER_CONFIG"
+    chmod 0700 "$DOCKER_CONFIG"
+
     REGISTRY_HOST="${var.region}-docker.pkg.dev"
     for ATTEMPT in $(seq 1 12); do
       TOKEN="$(curl -fsS -H 'Metadata-Flavor: Google' \
