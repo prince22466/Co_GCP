@@ -1,2 +1,0 @@
-google-cloud-compute==1.31.0
-google-cloud-monitoring==2.28.0
