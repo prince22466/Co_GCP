@@ -1,0 +1,44 @@
+{
+  "system": "agent",
+  "agent_version": "v1",
+  "scenario": "daily_normal",
+  "run_index": 1,
+  "trace_seconds": 600,
+  "wall_seconds": 600.0015342789993,
+  "performance": {
+    "requests_attempted": 30859,
+    "requests_successful": 30859,
+    "requests_failed": 0,
+    "success_rate": 1.0,
+    "latency_ms": {
+      "p50": 31.362344001536258,
+      "p95": 33.96398610275355,
+      "p99": 38.75922977960725,
+      "mean": 31.745618343370225
+    },
+    "scheduler_lateness_ms": {
+      "p95": 2.030888992885593,
+      "p99": 3.1604067450825815
+    },
+    "slo": {
+      "definition": "per-second p99 <= 500ms AND error_rate <= 1%",
+      "evaluated_seconds": 600,
+      "violating_seconds": 0,
+      "violation_fraction": 0.0
+    }
+  },
+  "agent": {
+    "samples": 126,
+    "mean_target_units": 1.0,
+    "peak_target_units": 1.0,
+    "mean_allocated_units": 1.0,
+    "peak_allocated_units": 1.0,
+    "scale_up_events": 0,
+    "scale_down_events": 0,
+    "first_scale_up_second": null,
+    "allocated_vcpu_seconds": 1250.2509306079955,
+    "allocated_gib_seconds": 1250.2509306079955,
+    "allocated_vcpu_hours": 0.3472919251688876,
+    "allocated_gib_hours": 0.3472919251688876
+  }
+}
