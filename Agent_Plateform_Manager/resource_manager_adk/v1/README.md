@@ -28,9 +28,10 @@ Google ADK agent -> manage_mig_capacity()
 
 Terraform also builds the benchmark web image, creates the Container-Optimized
 OS instance template, initializes the MIG at `min_units`, and places it behind
-an external HTTP load balancer. It does not create a GKE cluster, HPA, native
-Compute Engine autoscaler, or legacy controller VM. After creation, Terraform
-ignores MIG target-size drift because the ADK agent owns that field.
+an external HTTP load balancer. It does not create a GKE cluster, HPA, or legacy
+controller VM. It creates a regional Compute Engine autoscaler pinned to `OFF`
+before deploying the agent. After creation, Terraform ignores MIG target-size
+drift because the ADK agent owns that field.
 
 The model cannot supply a replica count to the live tool. The tool takes no
 arguments, reads fresh GCP state, calculates the permitted result locally, and
@@ -43,8 +44,9 @@ use those two signals.
 
 ## Safety defaults
 
-- Cloud Scheduler is paused.
-- `SCALING_ENABLED` is false (dry-run).
+- Cloud Scheduler invokes the agent every two minutes.
+- `SCALING_ENABLED` is true.
+- Terraform manages the native regional autoscaler in `OFF` mode.
 - Cloud Run requires authentication.
 - Only the Scheduler service account receives `roles/run.invoker`.
 - The runtime receives a custom role containing only MIG inspect/resize
@@ -52,11 +54,10 @@ use those two signals.
   bucket.
 - Capacity changes are limited to one unit per evaluation and 1-4 units by
   default.
-- Terraform refuses live mode until you confirm the old controller and native
-  Compute Engine autoscaler are disabled.
 
-Do not run another external controller, a Compute Engine autoscaler, and this
-service as concurrent writers. They can issue conflicting resize operations.
+Do not run another external controller alongside this service. The
+Terraform-managed native autoscaler remains attached for visibility but cannot
+resize the MIG while its mode is `OFF`.
 
 ## Local development
 
@@ -125,29 +126,10 @@ The MIG uses a proactive Terraform-managed update policy. When the instance
 template changes, `terraform apply` rolls the workload VMs onto the new
 template; no separate `gcloud` replacement command is required.
 
-This first deployment is paused and dry-run. Test the authenticated endpoint or
-temporarily enable the scheduler while leaving `enable_live_scaling = false`.
-Inspect the Cloud Run logs and verify the observed MIG and CPU values.
-
-Before live mode:
-
-1. Stop the legacy `arm-controller` VM/container.
-2. Verify native MIG autoscaling is off.
-3. Confirm the configured MIG, region, min/max, thresholds, and cooldown.
-4. Set:
-
-```hcl
-scheduler_paused           = false
-enable_live_scaling        = true
-exclusive_scaler_confirmed = true
-```
-
-Then create and apply a new reviewed plan:
-
-```bash
-terraform plan -out=tfplan-live
-terraform apply tfplan-live
-```
+The first deployment is live: Terraform disables native autoscaling, deploys
+the agent, and enables its two-minute Scheduler job in dependency order. No
+second enablement plan is needed. Do not run a legacy `arm-controller` or any
+other external scaler against the same MIG.
 
 Useful outputs:
 
@@ -158,6 +140,8 @@ terraform output workload_url
 terraform output workload_machine_type
 terraform output scheduler_state
 terraform output scaling_mode
+terraform output native_autoscaler_name
+terraform output native_autoscaler_mode
 terraform output runtime_service_account
 ```
 

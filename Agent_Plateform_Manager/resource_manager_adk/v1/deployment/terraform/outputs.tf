@@ -36,6 +36,14 @@ output "target_mig" {
   value = google_compute_region_instance_group_manager.target.self_link
 }
 
+output "native_autoscaler_name" {
+  value = google_compute_region_autoscaler.native_disabled.name
+}
+
+output "native_autoscaler_mode" {
+  value = google_compute_region_autoscaler.native_disabled.autoscaling_policy[0].mode
+}
+
 output "workload_image" {
   description = "Content-addressed benchmark workload image."
   value       = local.workload_image

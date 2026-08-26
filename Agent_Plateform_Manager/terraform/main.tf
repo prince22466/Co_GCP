@@ -100,6 +100,12 @@ resource "google_container_cluster" "autopilot" {
     channel = "REGULAR"
   }
 
+  # Adds cluster, namespace, and workload labels to Detailed Billing Export so
+  # Autopilot costs can be attributed to this benchmark.
+  cost_management_config {
+    enabled = true
+  }
+
   cluster_autoscaling {
     auto_provisioning_defaults {
       service_account = google_service_account.gke_nodes.email

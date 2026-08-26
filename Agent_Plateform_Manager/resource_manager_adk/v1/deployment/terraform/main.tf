@@ -209,6 +209,31 @@ resource "google_compute_region_instance_group_manager" "target" {
   }
 }
 
+# Keep the platform-native autoscaler present but explicitly disabled. This
+# makes exclusive ownership of target_size declarative: Terraform establishes
+# OFF mode before it can deploy the ADK service that performs live resizes.
+resource "google_compute_region_autoscaler" "native_disabled" {
+  project     = var.project_id
+  name        = "${substr(var.mig_name, 0, 40)}-native-off"
+  region      = var.region
+  target      = google_compute_region_instance_group_manager.target.id
+  description = "Native autoscaler pinned OFF; Resource Manager ADK owns MIG target size"
+
+  autoscaling_policy {
+    min_replicas    = var.min_units
+    max_replicas    = var.max_units
+    cooldown_period = var.cooldown_seconds
+    mode            = "OFF"
+
+    # OFF mode prevents this policy from resizing the MIG. Keeping the signal
+    # aligned with the agent threshold makes its dormant recommendation useful
+    # for diagnostics without creating a second active scaling controller.
+    cpu_utilization {
+      target = var.scale_up_cpu
+    }
+  }
+}
+
 resource "google_compute_firewall" "allow_health_checks" {
   project = var.project_id
   name    = "${var.mig_name}-allow-health-checks"
@@ -376,10 +401,6 @@ resource "google_cloud_run_v2_service" "agent" {
       condition     = var.scale_down_cpu < var.scale_up_cpu
       error_message = "scale_down_cpu must be lower than scale_up_cpu."
     }
-    precondition {
-      condition     = !var.enable_live_scaling || var.exclusive_scaler_confirmed
-      error_message = "Set exclusive_scaler_confirmed=true only after disabling the legacy controller and native MIG autoscaling."
-    }
   }
 
   template {
@@ -499,6 +520,7 @@ resource "google_cloud_run_v2_service" "agent" {
 
   depends_on = [
     null_resource.agent_image,
+    google_compute_region_autoscaler.native_disabled,
     google_project_iam_member.runtime_mig_scaler,
     google_project_iam_member.runtime_monitoring,
     google_project_iam_member.runtime_vertex,

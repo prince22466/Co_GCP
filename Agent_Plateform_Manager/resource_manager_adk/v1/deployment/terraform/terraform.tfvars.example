@@ -8,7 +8,7 @@ mig_machine_type = "e2-highcpu-2"
 min_units        = 1
 max_units        = 4
 
-# Safe rollout defaults. Validate a manual dry-run before changing these.
-scheduler_paused           = true
-enable_live_scaling        = false
-exclusive_scaler_confirmed = false
+# The native Compute Engine autoscaler is pinned OFF. The ADK agent is the
+# active scaler and runs automatically after deployment.
+scheduler_paused    = false
+enable_live_scaling = true

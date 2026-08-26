@@ -106,6 +106,7 @@ def test_both_system_runs_alternate_order(monkeypatch, tmp_path):
         "state_bucket": "state",
         "scheduler_state": "ENABLED",
         "scaling_mode": "LIVE",
+        "native_autoscaler_mode": "OFF",
     }
     scenario_path = tmp_path / "scenarios.json"
     scenario_path.write_text(

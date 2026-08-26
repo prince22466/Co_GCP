@@ -1035,11 +1035,20 @@ async def async_main(args: argparse.Namespace) -> None:
                 "state_bucket",
                 "scheduler_state",
                 "scaling_mode",
+                "native_autoscaler_mode",
             },
             args.agent_terraform_dir,
         )
         scheduler_enabled = str(agent_outputs["scheduler_state"]).upper() == "ENABLED"
         scaling_live = str(agent_outputs["scaling_mode"]).upper() == "LIVE"
+        native_autoscaler_off = (
+            str(agent_outputs["native_autoscaler_mode"]).upper() == "OFF"
+        )
+        if scaling_live and not native_autoscaler_off:
+            raise SystemExit(
+                "Agent live scaling requires native_autoscaler_mode=OFF. "
+                "Apply the current Agent Terraform configuration first."
+            )
         if not args.allow_agent_dry_run and not (scheduler_enabled and scaling_live):
             raise SystemExit(
                 "Agent experiments require scheduler_state=ENABLED and "

@@ -129,31 +129,32 @@ This stack creates:
 - The shared workload container image
 - A Container-Optimized OS instance template
 - A regional MIG initialized at `min_units`
+- A regional Compute Engine autoscaler pinned to `OFF`
 - The workload health check, firewall, load balancer, and external IP
 - Resource Manager ADK v1 as an authenticated Cloud Run service
 - A private Cloud Storage bucket for durable cooldown state
 - A Cloud Scheduler job that invokes the agent
 - Least-privilege runtime and scheduler identities
 
-It does not create a GKE cluster, native Compute Engine autoscaler, or legacy
-controller VM. Terraform ignores MIG `target_size` after creation so it does
-not reverse live decisions made by the agent.
+It does not create a GKE cluster or legacy controller VM. Terraform manages a
+native Compute Engine autoscaler in `OFF` mode before deploying the agent, and
+ignores MIG `target_size` after creation so it does not reverse live decisions
+made by the agent.
 
-The initial deployment is intentionally paused and dry-run:
+The deployment enables the ADK agent as the only scaler by default:
 
 ```hcl
-scheduler_paused           = true
-enable_live_scaling        = false
-exclusive_scaler_confirmed = false
+scheduler_paused    = false
+enable_live_scaling = true
 ```
 
-Validate agent observations in dry-run mode first. Before an agent scaling
-experiment, confirm that no other system can resize the MIG, then apply:
+Terraform pins the native autoscaler to `OFF` before the agent service is
+deployed. No separate enablement apply is required. To pause automatic
+evaluations or perform a dry run, override either setting explicitly:
 
 ```hcl
-scheduler_paused           = false
-enable_live_scaling        = true
-exclusive_scaler_confirmed = true
+scheduler_paused    = true
+enable_live_scaling = false
 ```
 
 Useful outputs:
@@ -164,6 +165,7 @@ terraform -chdir=resource_manager_adk/v1/deployment/terraform output workload_ur
 terraform -chdir=resource_manager_adk/v1/deployment/terraform output service_url
 terraform -chdir=resource_manager_adk/v1/deployment/terraform output scaling_mode
 terraform -chdir=resource_manager_adk/v1/deployment/terraform output scheduler_state
+terraform -chdir=resource_manager_adk/v1/deployment/terraform output native_autoscaler_mode
 ```
 
 See `resource_manager_adk/v1/README.md` for the detailed safety and deployment
@@ -258,6 +260,29 @@ Use GCP Billing Reports or Detailed Billing Export to BigQuery to attribute
 Cloud Run, Vertex AI, Compute Engine, load-balancing, and supporting-service
 costs. `pricing.example.json` is retained only as an optional manual-rate
 template.
+
+For a service and SKU breakdown, enable Detailed usage cost export and run
+`billing/agent_cost_components.sql` in BigQuery after replacing its export-table
+path and UTC run timestamps. The query reports gross cost, credits, and net
+cost. ADK is an application library and therefore has no separate ADK billing
+line item. Core agent-affiliated costs are Vertex AI, Cloud Run, Cloud
+Scheduler, Cloud Storage, and Cloud Monitoring. Cloud Logging is optional
+observability overhead. Agent-attributable network SKUs belong to the agent;
+Compute Engine, load-balancing, forwarding-rule, external-IP, and workload data
+transfer costs belong to the managed workload.
+
+For a standalone GKE Autopilot breakdown, first apply the GKE Terraform module
+with cost allocation enabled, then run `billing/gke_autopilot_cost_components.sql`
+after setting its export-table path and the GKE run's UTC window. It separates
+the explicit cluster-management fee from Autopilot-billed Pod vCPU, memory, and
+storage, plus load-balancing/network, observability, and deployment costs. It
+also reports cluster, namespace, workload, and resource names when available.
+Default general-purpose Autopilot uses Pod-based billing, so its Pod resource
+SKUs do not expose a separate hardware-versus-management split. GKE
+cost-allocation labels begin only after the feature is enabled; earlier GKE
+usage is not backfilled. Keep unrelated stacks out of the selected time window
+when possible, because their idle costs can otherwise appear in the same
+project-level billing window.
 
 ## Validation
 

@@ -179,19 +179,13 @@ variable "scheduler_cron" {
 }
 
 variable "scheduler_paused" {
-  description = "Keep scheduled model calls paused until validation is complete."
+  description = "Pause scheduled capacity evaluations. The agent runs automatically by default."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "enable_live_scaling" {
   description = "Allow the guarded tool to resize the MIG. False is dry-run mode."
   type        = bool
-  default     = false
-}
-
-variable "exclusive_scaler_confirmed" {
-  description = "Confirm that the legacy controller and Compute Engine autoscaler are disabled before live scaling."
-  type        = bool
-  default     = false
+  default     = true
 }
