@@ -16,6 +16,11 @@ output "runtime_service_account" {
   value = google_service_account.runtime.email
 }
 
+output "trace_explorer_url" {
+  description = "Cloud Trace Explorer for reviewing ADK agent invocations."
+  value       = "https://console.cloud.google.com/traces/explorer?project=${var.project_id}"
+}
+
 output "scheduler_job" {
   value = google_cloud_scheduler_job.evaluate.id
 }

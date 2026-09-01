@@ -4,12 +4,14 @@ locals {
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
     "cloudscheduler.googleapis.com",
+    "cloudtrace.googleapis.com",
     "compute.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "monitoring.googleapis.com",
     "run.googleapis.com",
     "storage.googleapis.com",
+    "telemetry.googleapis.com",
   ])
 
   source_root = "${path.module}/../.."
@@ -375,6 +377,17 @@ resource "google_project_iam_member" "runtime_vertex" {
   member  = "serviceAccount:${google_service_account.runtime.email}"
 }
 
+resource "google_project_iam_member" "runtime_trace_writer" {
+  project = var.project_id
+  role    = "roles/cloudtrace.agent"
+  member  = "serviceAccount:${google_service_account.runtime.email}"
+
+  depends_on = [
+    google_project_service.required["cloudtrace.googleapis.com"],
+    google_project_service.required["telemetry.googleapis.com"],
+  ]
+}
+
 resource "google_storage_bucket_iam_member" "runtime_state" {
   bucket = google_storage_bucket.state.name
   role   = "roles/storage.objectUser"
@@ -444,6 +457,30 @@ resource "google_cloud_run_v2_service" "agent" {
       env {
         name  = "ADK_MODEL"
         value = var.adk_model
+      }
+      env {
+        name  = "ADK_CLOUD_TRACE_ENABLED"
+        value = "true"
+      }
+      env {
+        name  = "OTEL_SERVICE_NAME"
+        value = var.service_name
+      }
+      env {
+        name  = "OTEL_RESOURCE_ATTRIBUTES"
+        value = "service.version=${var.agent_version},cloud.region=${var.region}"
+      }
+      env {
+        name  = "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS"
+        value = "false"
+      }
+      env {
+        name  = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+        value = "NO_CONTENT"
+      }
+      env {
+        name  = "ADK_TELEMETRY_IGNORE_RUN_CONFIG"
+        value = "true"
       }
       env {
         name  = "AGENT_VERSION"
@@ -523,9 +560,12 @@ resource "google_cloud_run_v2_service" "agent" {
     google_compute_region_autoscaler.native_disabled,
     google_project_iam_member.runtime_mig_scaler,
     google_project_iam_member.runtime_monitoring,
+    google_project_iam_member.runtime_trace_writer,
     google_project_iam_member.runtime_vertex,
     google_storage_bucket_iam_member.runtime_state,
+    google_project_service.required["cloudtrace.googleapis.com"],
     google_project_service.required["run.googleapis.com"],
+    google_project_service.required["telemetry.googleapis.com"],
   ]
 }
 
