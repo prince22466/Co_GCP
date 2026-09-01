@@ -11,8 +11,10 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from .agent import AGENT_VERSION, app as adk_app
+from .observability import configure_adk_cloud_trace
 
 
+CLOUD_TRACE_ENABLED = configure_adk_cloud_trace()
 service_app = FastAPI(title="Resource Manager ADK", docs_url=None, redoc_url=None)
 runner = InMemoryRunner(app=adk_app)
 evaluation_lock = asyncio.Lock()
@@ -20,7 +22,11 @@ evaluation_lock = asyncio.Lock()
 
 @service_app.get("/healthz")
 async def healthz() -> dict[str, str]:
-    return {"status": "ok", "agent_version": AGENT_VERSION}
+    return {
+        "status": "ok",
+        "agent_version": AGENT_VERSION,
+        "cloud_trace": "enabled" if CLOUD_TRACE_ENABLED else "disabled",
+    }
 
 
 def _event_payload(event: Any) -> tuple[str | None, object | None]:

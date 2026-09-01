@@ -24,6 +24,7 @@ Google ADK agent -> manage_mig_capacity()
                          +-- read recent Cloud Monitoring CPU
                          +-- enforce 1-step / min / max / cooldown policy
                          +-- resize the regional MIG when live mode is enabled
+                         +-- export agent/model/tool spans to Cloud Trace
 ```
 
 Terraform also builds the benchmark web image, creates the Container-Optimized
@@ -52,6 +53,8 @@ use those two signals.
 - The runtime receives a custom role containing only MIG inspect/resize
   permissions, plus Monitoring Viewer, Vertex AI User, and access to its state
   bucket.
+- The runtime receives Cloud Trace Agent permission so ADK can write traces.
+- Prompt, response, and tool-argument content is excluded from exported traces.
 - Capacity changes are limited to one unit per evaluation and 1-4 units by
   default.
 
@@ -143,7 +146,40 @@ terraform output scaling_mode
 terraform output native_autoscaler_name
 terraform output native_autoscaler_mode
 terraform output runtime_service_account
+terraform output trace_explorer_url
 ```
+
+## Review agent behavior
+
+ADK OpenTelemetry tracing is enabled automatically in the deployed Cloud Run
+service. After Scheduler has invoked `/evaluate`, open the URL returned by:
+
+```bash
+terraform output -raw trace_explorer_url
+```
+
+In Trace Explorer, filter **OpenTelemetry service** to the value of
+`service_name`. Open an `invoke_agent` trace to review the model call, the
+`manage_mig_capacity` tool call, their ordering, latency, status, invocation
+ID, and session ID. Trace ingestion can take several minutes after the first
+invocation.
+
+The trace answers what ran and how long it took. The existing structured
+`capacity_evaluated` Cloud Run log answers why the tool scaled or held: it
+contains the CPU snapshot, proposed capacity, applied status, and policy
+reasons. Use the trace timestamp to inspect the matching log entry.
+
+Confirm that the deployed revision initialized tracing:
+
+```bash
+SERVICE_URL="$(terraform output -raw service_url)"
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  "$SERVICE_URL/healthz"
+```
+
+The response includes `"cloud_trace":"enabled"`. A person who cannot open
+the traces needs `roles/cloudtrace.user` on the project; the Cloud Run runtime
+itself has only the write-only `roles/cloudtrace.agent` role.
 
 The identity running Terraform needs permission to enable services, create IAM
 roles/service accounts, create Compute Engine instance templates, MIGs, firewall
