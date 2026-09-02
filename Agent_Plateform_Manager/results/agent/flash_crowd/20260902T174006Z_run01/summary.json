@@ -1,0 +1,44 @@
+{
+  "system": "agent",
+  "agent_version": "v1",
+  "scenario": "flash_crowd",
+  "run_index": 1,
+  "trace_seconds": 270,
+  "wall_seconds": 270.0305682090002,
+  "performance": {
+    "requests_attempted": 81397,
+    "requests_successful": 6397,
+    "requests_failed": 75000,
+    "success_rate": 0.0785901200289937,
+    "latency_ms": {
+      "p50": 20.622177000404918,
+      "p95": 5418.696416201055,
+      "p99": 5892.738134640094,
+      "mean": 669.5970846571264
+    },
+    "scheduler_lateness_ms": {
+      "p95": 3.08593131230736,
+      "p99": 53.827385712647676
+    },
+    "slo": {
+      "definition": "per-second p99 <= 500ms AND error_rate <= 1%",
+      "evaluated_seconds": 270,
+      "violating_seconds": 210,
+      "violation_fraction": 0.7777777777777778
+    }
+  },
+  "agent": {
+    "samples": 60,
+    "mean_target_units": 1.0,
+    "peak_target_units": 1.0,
+    "mean_allocated_units": 1.0,
+    "peak_allocated_units": 1.0,
+    "scale_up_events": 0,
+    "scale_down_events": 0,
+    "first_scale_up_second": null,
+    "allocated_vcpu_seconds": 590.1688275520028,
+    "allocated_gib_seconds": 590.1688275520028,
+    "allocated_vcpu_hours": 0.16393578543111187,
+    "allocated_gib_hours": 0.16393578543111187
+  }
+}
