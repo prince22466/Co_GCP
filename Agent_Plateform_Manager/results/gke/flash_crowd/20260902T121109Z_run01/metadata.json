@@ -1,0 +1,27 @@
+{
+  "system": "gke",
+  "agent_version": null,
+  "scenario": "flash_crowd",
+  "description": "Abrupt traffic jump; measures reactive scale-up delay and tail latency during provisioning.",
+  "run_index": 1,
+  "started_utc": "2026-09-02T12:11:09.497132+00:00",
+  "target": "http://34.118.75.232/work?cpu_ms=8",
+  "terraform_outputs": {
+    "app_image": "europe-central2-docker.pkg.dev/tests101-483015/arm-stage1/arm-web:stage1-9baed6eccbd8",
+    "application_ip": "34.118.75.232",
+    "application_url": "http://34.118.75.232",
+    "cluster_name": "arm-stage1-autopilot",
+    "deployment_name": "arm-web",
+    "hpa_name": "arm-web",
+    "hpa_target_cpu": 60,
+    "max_replicas": 4,
+    "min_replicas": 1,
+    "namespace": "arm-stage1",
+    "pod_cpu": 2,
+    "pod_memory_gib": 2,
+    "region": "europe-central2",
+    "work_cpu_ms": 8
+  },
+  "rps_scale": 1.0,
+  "metrics_interval_seconds": 5.0
+}

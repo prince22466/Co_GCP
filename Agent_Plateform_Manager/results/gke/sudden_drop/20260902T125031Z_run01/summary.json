@@ -1,0 +1,43 @@
+{
+  "system": "gke",
+  "agent_version": null,
+  "scenario": "sudden_drop",
+  "run_index": 1,
+  "trace_seconds": 391,
+  "wall_seconds": 391.0354730190011,
+  "performance": {
+    "requests_attempted": 94161,
+    "requests_successful": 20354,
+    "requests_failed": 73807,
+    "success_rate": 0.21616168052590776,
+    "latency_ms": {
+      "p50": 46.46632000003592,
+      "p95": 5870.487144000435,
+      "p99": 5977.472048199343,
+      "mean": 2103.0827705493875
+    },
+    "scheduler_lateness_ms": {
+      "p95": 1.4131531806924613,
+      "p99": 55.48691456096937
+    },
+    "slo": {
+      "definition": "per-second p99 <= 500ms AND error_rate <= 1%",
+      "evaluated_seconds": 391,
+      "violating_seconds": 253,
+      "violation_fraction": 0.6470588235294118
+    }
+  },
+  "gke": {
+    "samples": 85,
+    "mean_replicas": 1.8235294117647058,
+    "peak_replicas": 2.0,
+    "scale_up_events": 1,
+    "scale_down_events": 0,
+    "first_scale_up_second": 70.14002340600018,
+    "peak_actual_cpu_cores": 1.303243686,
+    "requested_vcpu_seconds": 1531.073091251994,
+    "requested_gib_seconds": 1531.073091251994,
+    "requested_vcpu_hours": 0.42529808090333165,
+    "requested_gib_hours": 0.42529808090333165
+  }
+}
