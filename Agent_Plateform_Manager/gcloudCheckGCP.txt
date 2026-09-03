@@ -1,0 +1,28 @@
+PROJECT_ID="$(gcloud config get-value project)"
+
+# GKE
+gcloud container clusters list --project="$PROJECT_ID"
+
+# VMs, disks, snapshots and managed instance groups
+gcloud compute instances list --project="$PROJECT_ID"
+gcloud compute disks list --project="$PROJECT_ID"
+gcloud compute snapshots list --project="$PROJECT_ID"
+gcloud compute instance-groups managed list --project="$PROJECT_ID"
+
+# Public IPs and load balancers
+gcloud compute addresses list --project="$PROJECT_ID"
+gcloud compute forwarding-rules list --project="$PROJECT_ID"
+gcloud compute backend-services list --project="$PROJECT_ID"
+
+# Cloud Run and scheduled invocations
+gcloud run services list --project="$PROJECT_ID" --region=europe-central2
+gcloud scheduler jobs list --project="$PROJECT_ID" --location=europe-central2
+
+# Persistent storage
+gcloud storage buckets list --project="$PROJECT_ID"
+gcloud artifacts repositories list --project="$PROJECT_ID" --location=all
+
+# Other commonly billable services
+gcloud sql instances list --project="$PROJECT_ID"
+gcloud functions list --project="$PROJECT_ID"
+gcloud compute routers list --project="$PROJECT_ID"
